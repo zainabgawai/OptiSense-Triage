@@ -25,9 +25,9 @@
 
 <br/>
 
-> **"tachycardia and chest pain are the primary risk factors here — recommend immediate evaluation"**
+> **“Transforming Emergency Care with AI — delivering faster, more accurate triage decisions, better patient outcomes, and smarter resource allocation. Together, we can revolutionize emergency department efficiency and save lives.”**
 > 
-> *— Gemini 2.5 Flash explainability layer, in plain English*
+> *— OptiSense Triage Mission*
 
 <br/>
 
