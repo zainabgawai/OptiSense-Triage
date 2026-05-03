@@ -1,0 +1,125 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+
+/* ── RESET & ROOT ── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg: #1e1e1e;
+  --bg2: #363333;
+  --bg3: #2d2c2c;
+  --bg4: #26282b;
+  --bg5: #525456;
+  --border: #d2d6de;
+  --border2: #bcc2cc;
+
+  --tx: #dee1e9;
+  --tx2: #7e8185;
+  --tx3: #ebeff4;
+  --tx4: #7b7c7d;
+
+  /* ESI colours */
+  --esi1: #e02020;
+  --esi1bg: rgba(224, 32, 32, 0.09);
+  --esi1border: rgba(224, 32, 32, 0.28);
+
+  --esi2: #e06010;
+  --esi2bg: rgba(224, 96, 16, 0.09);
+  --esi2border: rgba(224, 96, 16, 0.28);
+
+  --esi3: #c49a00;
+  --esi3bg: rgba(196, 154, 0, 0.09);
+  --esi3border: rgba(196, 154, 0, 0.28);
+
+  --esi4: #1e9e6a;
+  --esi4bg: rgba(30, 158, 106, 0.09);
+  --esi4border: rgba(30, 158, 106, 0.28);
+
+  --esi5: #2e7eb0;
+  --esi5bg: rgba(46, 126, 176, 0.09);
+  --esi5border: rgba(46, 126, 176, 0.28);
+
+  /* Accent */
+  --blue: #2e7eb0;
+  --blue-dim: rgba(46, 126, 176, 0.10);
+  --green: #1e9e6a;
+  --red: #e02020;
+  --amber: #c49a00;
+
+  /* Typography */
+  --ff-sans: 'DM Sans', sans-serif;
+  --ff-mono: 'DM Mono', 'Space Mono', monospace;
+  --ff-head: 'Space Mono', monospace;
+
+  /* Spacing */
+  --r: 6px;
+  --r2: 10px;
+  --r3: 14px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  background: #e0e3e9;
+  color: var(--tx);
+  font-family: var(--ff-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+/* input reset */
+input,
+select,
+textarea,
+button {
+  font-family: inherit;
+  font-size: inherit;
+  outline: none;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+}
+
+input[type=number] {
+  -moz-appearance: textfield;
+}
+
+/* utilities */
+.mono {
+  font-family: var(--ff-mono);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
