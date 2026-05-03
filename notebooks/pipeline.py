@@ -1,16 +1,28 @@
 """
-pipeline.py — OptiSense Triage data pipeline
+pipeline_v3.py — Leakage-free data pipeline
 =============================================
-Reads raw MIMIC-III CSVs, extracts features, derives ESI labels,
-performs a subject-isolated train/test split BEFORE any augmentation
-(to prevent leakage), embeds complaint text, augments the training
-split only, adds synthetic ESI-5 patients, balances classes, and
-saves two CSVs:
- 
-  mimic-iii-clinical-db/mimic-iii-real.csv   ← held-out test set (never touched again)
-  mimic-iii-clinical-db/mimic-iii-train.csv  ← augmented + balanced training set
- 
-Run this first, then run train_model.py.
+Key fix over v2:
+  THE TRAIN/TEST SPLIT NOW HAPPENS INSIDE THE PIPELINE, BEFORE AUGMENTATION.
+
+  v2 bug: ALL 70 real MIMIC rows were saved as both the test set AND as the
+  source for augmentation. Adding 7% noise to a row and putting it in the
+  training set while the original is in the test set is leakage — the model
+  memorises every test patient with slightly different numbers → F1=1.0 (fake).
+
+  v3 fix:
+    - Split real MIMIC rows 80/20 by subject_id (subject-isolated, stratified)
+    - 80% (df_train_real) → augment → add ESI-5 synthetic → balance → train CSV
+    - 20% (df_test_real)  → saved as-is, never touched again → test CSV
+    - PCA is fit ONLY on df_train_real embeddings to prevent test-set leakage
+      into the embedding space as well
+    - Synthetic ESI-5 rows get unique negative subject_ids so CV grouping works
+
+  Other fixes carried over from v2:
+    - Removed shock_index, has_sepsis, has_resp_failure
+    - Sentence-embeddings → PCA(8) for chief complaint
+    - Realistic ESI-5 synthetic patients
+
+Run: python pipeline_v3.py
 """
 
 import pandas as pd
@@ -21,27 +33,18 @@ from sklearn.decomposition import PCA
 import warnings
 warnings.filterwarnings('ignore')
 
-# ── FILE PATHS  ────────────────────────────────────────────────────────────
-# RAW : folder containing the original MIMIC-III CSV exports
-# OUT : folder where processed train/test CSVs will be written
+# ── PATHS ─────────────────────────────────────────────────
 RAW   = Path('mimic-iii-clinical-db/raw')
 OUT   = Path('mimic-iii-clinical-db')
 
-# ── 1. Load raw MIMIC-III tables ──────────────────────────────────────────
-# CHARTEVENTS  : every bedside monitor and nursing chart reading
-# ADMISSIONS   : one row per hospital admission — admit/discharge times + diagnosis string
-# PATIENTS     : demographics (date of birth, gender)
-# DIAGNOSES_ICD: ICD-9 diagnosis codes per admission — used for comorbidity flags
-print("Loading raw files...")
+# ── 1. LOAD ───────────────────────────────────────────────
 print("Loading raw files...")
 chart      = pd.read_csv(RAW / 'CHARTEVENTS.csv', low_memory=False)
 admissions = pd.read_csv(RAW / 'ADMISSIONS.csv')
 patients   = pd.read_csv(RAW / 'PATIENTS.csv')
 diagnoses  = pd.read_csv(RAW / 'DIAGNOSES_ICD.csv')
 
-# ── 2. Extract vitals from CHARTEVENTS ────────────────────────────────────
-# CHARTEVENTS stores every recorded measurement. We filter to the 6 vitals
-# used as model features, identified by their MIMIC-III itemid codes.
+# ── 2. VITALS ─────────────────────────────────────────────
 chart['charttime']      = pd.to_datetime(chart['charttime'])
 admissions['admittime'] = pd.to_datetime(admissions['admittime'])
 
@@ -63,8 +66,6 @@ vitals['time_from_admit'] = vitals['charttime'] - vitals['admittime']
 vitals = vitals[vitals['time_from_admit'] >= pd.Timedelta(0)]
 vitals = vitals.sort_values('time_from_admit')
 
-# Take the FIRST recorded value per vital per admission — this approximates
-# the triage vital signs a nurse would capture on patient arrival
 vitals_closest = (
     vitals.groupby(['subject_id', 'hadm_id', 'vital'])['valuenum']
     .first().unstack().reset_index()
@@ -83,7 +84,7 @@ adm['age']      = ((adm['admittime'] - adm['dob']).dt.days / 365).clip(0, 100).f
 adm['gender_m'] = (adm['gender'] == 'M').astype(int)
 adm['los_hours']= ((adm['dischtime'] - adm['admittime']).dt.total_seconds() / 3600).round(2)
 
-# ── 4. COMORBIDITIES (pre-existing only) ──
+# ── 4. COMORBIDITIES (pre-existing only — no sepsis/resp_failure) ──
 def flag_comorbidities(df):
     codes = df.groupby('hadm_id')['icd9_code'].apply(set)
     r = pd.DataFrame(index=codes.index)
@@ -131,15 +132,7 @@ def get_complaint_text(diagnosis_str):
 complaint = admissions[['hadm_id', 'diagnosis']].copy()
 complaint['complaint_text'] = complaint['diagnosis'].apply(get_complaint_text)
 
-# ── 6. Derive ESI labels from outcome proxy ───────────────────────────────
-# MIMIC-III has no ground-truth ESI scores recorded at triage.
-# We approximate them using hospital_expire_flag and length-of-stay:
-#   ESI-1 : died AND stay < 24h  → immediate resuscitation required
-#   ESI-2 : died OR stay > 120h  → emergent, high resource need
-#   ESI-3 : stay > 48h           → urgent, multiple resources
-#   ESI-4 : stay > 12h           → less urgent, one resource
-#   ESI-5 : everything else      → non-urgent (rare in admitted MIMIC patients)
-
+# ── 6. ESI LABELS ─────────────────────────────────────────
 def derive_esi(row):
     if   row['hospital_expire_flag'] == 1 and row['los_hours'] < 24: return 1
     elif row['hospital_expire_flag'] == 1 or  row['los_hours'] > 120: return 2
@@ -176,10 +169,10 @@ print(f"\nFull real MIMIC dataset: {df.shape}")
 print(df['esi_level'].value_counts().sort_index())
 
 # ── 8. SUBJECT-ISOLATED TRAIN / TEST SPLIT ────────────────
-# We split on subject_id (patient), not on rows.
-# This ensures the same patient never appears in both train and test,
-# preventing the model from memorising individual patients.
-# Stratification on esi_level preserves ESI class proportions in both splits.
+# THIS IS THE CRITICAL FIX.
+# Split by subject_id so no patient appears in both train and test.
+# Stratify by esi_level so class distribution is preserved in both splits.
+# Augmentation happens AFTER this split — the test set is never touched again.
 from sklearn.model_selection import train_test_split
 
 unique_subjects = df[['subject_id', 'esi_level']].drop_duplicates('subject_id')
@@ -242,22 +235,20 @@ try:
 except ImportError:
     print("sentence-transformers not installed — skipping embeddings")
 
+# Drop complaint_text — it was only needed for embedding
 df_train_real = df_train_real.drop(columns=['complaint_text'], errors='ignore')
 df_test_real  = df_test_real.drop(columns=['complaint_text'],  errors='ignore')
 
+# Move target to end
 for _df in [df_train_real, df_test_real]:
     cols = [c for c in _df.columns if c != 'esi_level'] + ['esi_level']
     _df  = _df[cols]
 
 # ── 10. SAVE TEST SET — NEVER TOUCHED AGAIN ───────────────
 df_test_real.to_csv(OUT / 'mimic-iii-real.csv', index=False)
-print(f"\nSaved test data  -> mimic-iii-clinical-db/mimic-iii-real.csv  ({len(df_test_real)} rows)")
+print(f"\nSaved test data  → mimic-iii-clinical-db/mimic-iii-real.csv  ({len(df_test_real)} rows)")
 
 # ── 11. AUGMENT TRAIN SPLIT ONLY ──────────────────────────
-# Multiply training data by adding small Gaussian noise to numeric features.
-# factor=8 → 8 additional noisy copies per real row (9× total).
-# noise_pct=0.07 → noise std = 7% of each feature's std (clinically plausible).
-# Embedding dims get tiny noise (std=0.01) to avoid identical vectors.
 def augment_training(df, factor=8, noise_pct=0.07):
     numeric_cols = ['heart_rate', 'systolic_bp', 'diastolic_bp',
                     'resp_rate', 'spo2', 'temperature', 'age']
@@ -359,7 +350,7 @@ print(f"\nTraining dataset: {df_train.shape}")
 print(df_train['esi_level'].value_counts().sort_index())
 
 df_train.to_csv(OUT / 'mimic-iii-train.csv', index=False)
-print(f"Saved training data -> mimic-iii-clinical-db/mimic-iii-train.csv ({len(df_train)} rows)")
+print(f"Saved training data → mimic-iii-clinical-db/mimic-iii-train.csv ({len(df_train)} rows)")
 print("\nPipeline complete. Run train_model_v5.py next.")
 
 print("Total admissions:", len(admissions))

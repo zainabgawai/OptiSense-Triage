@@ -9,6 +9,20 @@ Endpoints:
     POST /triage   – run model on patient data → ESI + clinical signals + LLM next steps
     GET  /queue    – patients sorted by severity (ESI asc, then arrival asc)
     GET  /beds     – mock bed allocation status across categories
+
+Changes from original main.py (aligned with train_model_v5 + pipeline_v3):
+  - Removed SHAP: model v5 no longer saves shap_explainer.pkl.
+    Clinical explanations come from clinical_signal_engine (rule-based) + Gemini LLM.
+  - Removed shock_index feature: dropped in pipeline_v3 (redundant — HR + SBP already present).
+  - Removed has_sepsis / has_resp_failure: dropped in pipeline_v3 (post-diagnosis leakage).
+  - Added complaint_text → sentence-embedding → PCA(8 dims) feature encoding at inference time.
+    Falls back gracefully if sentence-transformers is not installed.
+  - _request_to_features() now calls explain_prediction() from the training module
+    logic re-implemented here directly so main.py stays self-contained.
+  - TriageResponse now carries the full explain_prediction() output: override flags,
+    human-review flag, clinical signals, LLM findings, and per-class probabilities.
+  - QueueEntry carries override_applied, needs_human_review, critical_flags for
+    dashboard escalation display.
 """
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -70,7 +84,7 @@ except Exception as e:
           "complaint_emb_* features will use median imputation.")
 
 
-# ─── Clinical override thresholds ────────────────────────────────────────
+# ─── Clinical override thresholds (mirror train_model_v5 CONFIG) ────────
 
 _ESI1_VITALS = {
     "sbp_low":  80,
@@ -177,7 +191,7 @@ def _request_to_features(req: TriageRequest) -> dict:
     return features
 
 
-# ─── Clinical override ─────────────────────────────────────────────────────────────────
+# ─── Clinical override (mirrors apply_clinical_override in train_model_v5) ──
 
 def _apply_clinical_override(model_esi: int,
                               features: dict) -> tuple[int, str | None]:
@@ -224,7 +238,7 @@ def _apply_clinical_override(model_esi: int,
     return model_esi, None
 
 
-# ─── Clinical signal engine ──────────────────────────────────────────────────────
+# ─── Clinical signal engine (mirrors clinical_signal_engine in train_model_v5) ─
 
 def _clinical_signal_engine(features: dict) -> dict:
     hr   = features.get("heart_rate")
@@ -404,7 +418,7 @@ def _clinical_fallback(clinical_output: dict, esi_level: int,
     }
 
 
-# ─── Full prediction ──────────────────────────────────────────────────────────────────
+# ─── Full prediction (mirrors explain_prediction in train_model_v5) ──────
 
 def _refine_non_critical_esi(features: dict) -> int:
     """
@@ -586,16 +600,6 @@ Respond ONLY with valid JSON, no markdown, no extra text:
         )
         text = response.text if hasattr(response, "text") and response.text \
                else response.contents[0].text
-
-        text = text.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        elif text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-
         return json.loads(text)
 
     except Exception as e:
@@ -706,7 +710,7 @@ _seed_beds()
 # ─── App ────────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="OptiSense Triage",
+    title="ER Triage System",
     description=(
         "Predicts ESI (Emergency Severity Index 1–5) at patient arrival using "
         "XGBoost + clinical override rules + Gemini LLM clinical reasoning."
