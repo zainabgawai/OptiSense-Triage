@@ -27,7 +27,6 @@
 
 > **“Transforming Emergency Care with AI — delivering faster, more accurate triage decisions, better patient outcomes, and smarter resource allocation. Together, we can revolutionize emergency department efficiency and save lives.”**
 > 
-> *— OptiSense Triage Mission*
 
 <br/>
 
